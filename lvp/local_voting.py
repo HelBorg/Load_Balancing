@@ -49,6 +49,7 @@ class AgentLB(Agent):
         :param step: number of current step
         :return:
         """
+        logging.warning(f"x = {x}, step = {step}")
         if x == 0:
             self.neighbors_exchange(0)
             self.neighbors_exchange(0)
@@ -82,7 +83,10 @@ class AgentLB(Agent):
 
             # extract tasks to send
             num_tasks = 0
-            while complex > 0 and queue.shape[0] > 0:
+            if abs(complex) > abs(x):
+                complex = x
+
+            while complex > 0 and queue.shape[0] > num_tasks:
                 complex -= queue.iloc[num_tasks].complexity
                 num_tasks += 1
 
@@ -92,6 +96,7 @@ class AgentLB(Agent):
             logging.warning(f"Send {send} to {key} (needed {complex}), need {x}")
             # send tasks
             to_send[key] = send
+        logging.warning(f"Left \n{self.queue}")
 
         if len(to_send):
             self.neighbors_exchange(to_send, dict_neigh=True)
@@ -108,10 +113,10 @@ class AgentLB(Agent):
         for key, val in res.items():
             if not isinstance(val, pd.DataFrame):
                 logging.error(f"Received not dataframe for {key}: {res}")
-                break
+                continue
 
             self.queue = pd.concat([self.queue.iloc[:1], val, self.queue.iloc[1:]])
-            logging.warning(f"Need {x}, get {val} from {key}")
+            logging.warning(f"Need {x}, get {val} from {key} queu = \n{val}")
 
     def execute_tasks(self):
         """
@@ -119,6 +124,7 @@ class AgentLB(Agent):
         :return:
         """
         execute = self.produc
+        logging.warning(f"Execute {execute}, queue = \n{self.queue}")
         while execute != 0:
             if self.queue.shape[0] == 0:
                 logging.warning(f"queue is empty could do {execute}")
@@ -131,6 +137,7 @@ class AgentLB(Agent):
             else:
                 execute -= first_task
                 self.queue = self.queue.iloc[1:]
+        logging.warning(f"Executed queue {self.queue}")
 
 
 class LocalVoting(Consensus):
