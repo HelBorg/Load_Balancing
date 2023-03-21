@@ -23,8 +23,8 @@ class AgentLB(Agent):
         self.communicator.neighbors_send(obj, out_neighbors)
 
     def update_value(self, old_value, new_value, step):
-        self.rearrange_tasks(old_value - new_value, step)
-        self.execute_tasks()  # todo: move to algorithm and perform before iteration
+        self.rearrange_tasks(np.floor(old_value - new_value), step)
+        self.execute_tasks(step)
 
     def get_queue_length(self, step):
         """
@@ -39,7 +39,7 @@ class AgentLB(Agent):
         Get queue aat current step
         :return:
         """
-        logging.warning(self.queue[self.queue.time <= step])
+        # logging.warning(self.queue[self.queue.time <= step])
         return self.queue[self.queue.time <= step]
 
     def rearrange_tasks(self, x, step):
@@ -49,7 +49,7 @@ class AgentLB(Agent):
         :param step: number of current step
         :return:
         """
-        logging.warning(f"x = {x}, step = {step}")
+        # logging.warning(f"x = {x}, step = {step}")
         if x == 0:
             self.neighbors_exchange(0)
             self.neighbors_exchange(0)
@@ -68,11 +68,11 @@ class AgentLB(Agent):
         """
         # get neibors who vote to receive
         neib_info = self.neighbors_exchange(0)
-        logging.warning(f"Will send to {neib_info}")
+        # logging.warning(f"Will send to {neib_info}")
         if len(neib_info) == 0:
             return
 
-        queue = self.get_queue(step)
+        queue = self.get_queue(step).sort_values("complexity")
 
         # send tasks
         to_send = {}
@@ -92,14 +92,15 @@ class AgentLB(Agent):
 
             x -= sum(queue.iloc[:num_tasks].complexity)
             send = queue.iloc[:num_tasks]
-            self.queue = self.queue[num_tasks:]
-            logging.warning(f"Send {send} to {key} (needed {complex}), need {x}")
+            self.queue = self.queue[~self.queue.index.isin(send.index)]
+            # logging.warning(f"Send {send} to {key} (needed {complex}), need {x}")
             # send tasks
             to_send[key] = send
-        logging.warning(f"Left \n{self.queue}")
+        # logging.warning(f"Left \n{self.queue}")
 
         if len(to_send):
             self.neighbors_exchange(to_send, dict_neigh=True)
+            self.queue = self.queue.reset_index(drop=True).sort_values("time")
 
     def receive_tasks(self, x):
         """
@@ -109,25 +110,26 @@ class AgentLB(Agent):
         """
         self.neighbors_exchange(x)
         res = self.neighbors_exchange(0)
-        logging.warning(f"Received res = \n{res}")
+        # logging.warning(f"Received res = \n{res}")
         for key, val in res.items():
             if not isinstance(val, pd.DataFrame):
-                logging.error(f"Received not dataframe for {key}: {res}")
+                # logging.error(f"Received not dataframe for {key}: {res}")
                 continue
 
             self.queue = pd.concat([self.queue.iloc[:1], val, self.queue.iloc[1:]])
-            logging.warning(f"Need {x}, get {val} from {key} queu = \n{val}")
+            # logging.warning(f"Need {x}, get {val} from {key} queu = \n{val}")
+        self.queue = self.queue.reset_index(drop=True).sort_values("time")
 
-    def execute_tasks(self):
+    def execute_tasks(self, step):
         """
         Execute tasks: remove first tasks in the queue with respect to productivity
         :return:
         """
         execute = self.produc
-        logging.warning(f"Execute {execute}, queue = \n{self.queue}")
+        # logging.warning(f"Execute {execute}, queue = \n{self.queue}")
         while execute != 0:
-            if self.queue.shape[0] == 0:
-                logging.warning(f"queue is empty could do {execute}")
+            if self.get_queue_length(step) == 0:
+                # logging.warning(f"queue is empty could do {execute}")
                 break
 
             first_task = self.queue.iloc[0, 1]
@@ -137,7 +139,7 @@ class AgentLB(Agent):
             else:
                 execute -= first_task
                 self.queue = self.queue.iloc[1:]
-        logging.warning(f"Executed queue {self.queue}")
+        # logging.warning(f"Executed queue {self.queue}")
 
 
 class LocalVoting(Consensus):
@@ -157,8 +159,8 @@ class LocalVoting(Consensus):
         for neigh in data:
             self.x_neigh[neigh] = data[neigh]
 
-        x_avg = self.x + self.gamma * sum([(self.x_neigh[i] - self.x) for i in self.agent.in_neighbors])
-        logging.warning(f"Step: {step} x: {self.x}, x_avg: {x_avg}")
+        x_avg = self.x - self.gamma * sum([(self.x - self.x_neigh[i]) for i in self.agent.in_neighbors])
+        # logging.warning(f"Step: {step} x: {self.x}, x_avg: {x_avg}")
         self.agent.update_value(self.x, x_avg, step)
 
     def run(self, iterations: int = 100, verbose: bool = False, **kwargs):
@@ -168,7 +170,7 @@ class LocalVoting(Consensus):
             iterations: Number of iterations. Defaults to 100.
             verbose: If True print some information during the evolution of the algorithm. Defaults to False.
         """
-        logging.warning(f"Agent:{self.agent.id}")
+        # logging.warning(f"Agent:{self.agent.id}")
         if not isinstance(iterations, int):
             raise TypeError("iterations must be an int")
         if self.enable_log:
@@ -179,16 +181,21 @@ class LocalVoting(Consensus):
 
         for k in range(iterations):
             self.x = self.agent.get_queue_length(k)
-            logging.warning(f"Step: {k}, x = {self.x}")
+            # logging.warning(f"Step: {k}, x = {self.x}")
+            if k == 0:
+                print(f"Agent {self.agent.id}: x = {self.x}")
+
+            if verbose:
+                queue_1 = self.agent.get_queue(k)
+                new_queue = queue_1[queue_1.time == k]
+                # logging.warning(f"new tasks {sum(new_queue.complexity)}: \n{new_queue}")
+
             self.iterate_run(k, **kwargs)
 
             if self.enable_log:
                 self.x = self.agent.get_queue_length(k)
                 self.sequence[k] = self.x
 
-            if verbose:
-                if self.agent.id == 0:
-                    logging.warning('Iteration {}'.format(k))
 
         if self.enable_log:
             return self.sequence
@@ -216,7 +223,7 @@ class AcceleratedLocalVoting(LocalVoting):
         super(LocalVoting, self).__init__(agent=agent,
                                           initial_condition=initial_condition,
                                           enable_log=enable_log)
-        self.nesterov_step = self.x
+        self.nesterov_step = 0
 
         self.L = parameters.get("L")
         self.mu = parameters.get("mu")
@@ -224,6 +231,7 @@ class AcceleratedLocalVoting(LocalVoting):
         self.eta = parameters.get("eta")
         self.gamma = parameters.get("gamma", [])
         self.alpha = parameters.get("alpha")
+
 
     def iterate_run(self, step, **kwargs):
         """Run a single iterate of the algorithm
@@ -239,11 +247,21 @@ class AcceleratedLocalVoting(LocalVoting):
               * (self.alpha * self.gamma[0] * self.nesterov_step + self.gamma[1] * self.x)
 
         y_n = sum([self.agent.in_weights[i] * (x_n - self.x_neigh[i]) for i in self.agent.in_neighbors])
+        # logging.warning(f"y_n = {y_n}, x - alpha y_n = {self.x - self.h*y_n}")
+        # logging.warning(f"x_n = {x_n} x = {self.x}")
         x_avg = x_n - self.h * y_n
 
         self.nesterov_step = 1 / self.gamma[0] * \
                              ((1 - self.alpha) * self.gamma[0] * self.nesterov_step
                               + self.alpha * (self.mu - self.eta) * x_n
                               - self.alpha * y_n)
-        logging.warning(f"Step: {step} x: {self.x}, x_avg: {x_avg}")
+        # logging.warning(f"Step: {step} x: {self.x}, x_avg: {x_avg}")
         self.agent.update_value(self.x, x_avg, step)
+
+        H = self.h - self.h * self.h * self.L / 2
+        if H - self.alpha * self.alpha / (2 * self.gamma[1]) < 0:
+            logging.warning(H)
+            logging.exception(f"Oh no: {H - self.alpha * self.alpha / (2 * self.gamma[1])}")
+            print("Exception")
+            raise BaseException()
+

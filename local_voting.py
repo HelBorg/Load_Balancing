@@ -1,6 +1,7 @@
 import logging
 import os
 import sys
+import datetime
 
 import numpy as np
 import pandas as pd
@@ -27,23 +28,26 @@ if __name__ == "__main__":
     comm = MPI.COMM_WORLD
     nproc = comm.Get_size()
     local_rank = comm.Get_rank()
-    logging.basicConfig(filename=f'cache/loggs_{local_rank}.log', filemode='w', level=logging.INFO)
+    id = int(datetime.datetime.now().timestamp())
+    logging.basicConfig(filename=f'cache/loggs/_loggs_{local_rank}.log', filemode='w', level=logging.INFO)
 
+    if local_rank == 0:
+        print(f"Time: {datetime.datetime.now()}")
     # Generate a common graph (everyone use the same seed)
     Adj = np.array([
-        [0, 1, 1, 1, 1],
-        [1, 0, 1, 1, 1],
-        [1, 1, 0, 1, 1],
-        [1, 1, 1, 0, 1],
-        [1, 1, 1, 1, 0]
+        [0, 0, 1, 1, 0],
+        [0, 0, 0, 1, 1],
+        [1, 0, 0, 0, 1],
+        [1, 1, 0, 0, 0],
+        [0, 1, 1, 0, 0]
     ])
-    W = Adj / 4
+    W = Adj / 2
 
     # reset local seed
     np.random.seed()
 
     if generate:
-        queue_raw = np.random.randint(0, 100, size=(100, 2))
+        queue_raw = np.random.randint(0, 100, size=(20, 2))
         add = [[0, np.random.randint(100)] for i in range(10)]
         queue_raw = np.append(queue_raw, add, axis=0)
 
@@ -52,10 +56,10 @@ if __name__ == "__main__":
     else:
         queue = pd.read_csv(f"cache/agent_{local_rank}_queue.csv")
 
-    logging.info(f"Queue: \n{queue}")
+    # logging.info(f"Queue: \n{queue}")
     # create local agent
     agent = AgentLB(queue=queue,
-                    produc=1,
+                    produc=5,
                     in_neighbors=np.nonzero(Adj[local_rank, :])[0].tolist(),
                     out_neighbors=np.nonzero(Adj[:, local_rank])[0].tolist(),
                     in_weights=W[local_rank, :].tolist())
@@ -63,7 +67,7 @@ if __name__ == "__main__":
     d = 2  # decision variable dimension (n, 1)
 
     algorithm = LocalVoting(
-        gamma=0.25,
+        gamma=0.2,
         agent=agent,
         initial_condition=np.array([0]),
         enable_log=True)  # enable storing of the generated sequences
