@@ -11,39 +11,14 @@ import pandas as pd
 
 parameters = np.load("cache/params.npy", allow_pickle=True)[()]
 
-# parameters = {
-#     "L": 3,
-#     "mu": 0.95,
-#     "h": 0.1,
-#     "eta": 0.9,
-#     "gamma": [0.09],
-#     "alpha": 0.08
-# }
-
-# parameters = {
-#     "L": 3,
-#     "mu": 0.95,
-#     "h": 0.1,
-#     "eta": 0.9,
-#     "gamma": [0.1],
-#     "alpha": 0.07
-# }
-
-# parameters = {
-#     "L": 3,
-#     "mu": 1,
-#     "h": 0.3,
-#     "eta": 0.8,
-#     "gamma": [0.1],
-#     "alpha": 0.15
-# }
 
 size = MPI.COMM_WORLD.Get_size()
 rank = MPI.COMM_WORLD.Get_rank()
 generate = True
+
+# For debugging (start remote debugging 5 times, specify ports, start programm)
 # port_mapping = [62383, 54588, 62383, 54590]
-# if rank == 2:
-#     pydevd_pycharm.settrace('localhost', port=port_mapping[rank], stdoutToServer=True, stderrToServer=True)
+# pydevd_pycharm.settrace('localhost', port=port_mapping[rank], stdoutToServer=True, stderrToServer=True)
 #
 # print(f"pid: {os.getpid()}, size = {size}, rank: {rank}")
 
@@ -58,7 +33,8 @@ if __name__ == "__main__":
     if local_rank == 0:
         print(f"Time: {datetime.datetime.now()}")
         logging.warning(f"Parameters: {parameters}")
-    # Generate a common graph (everyone use the same seed)
+
+    # Generate a common graph
     Adj = np.array([
         [0, 0, 1, 1, 0],
         [0, 0, 0, 1, 1],
@@ -71,26 +47,11 @@ if __name__ == "__main__":
     # reset local seed
     np.random.seed()
 
-    # if generate and local_rank == 0:
-    #     size_queue = int(1000 / nproc * (local_rank + 1))
-    #     size_start = int(10/nproc * local_rank)
-    #     queue_raw = np.random.randint(0, size_queue, size=(size_queue, 2))
-    #     add = [[0, np.random.randint(size_queue)] for i in range(50)]
-    #     queue_raw = np.append(queue_raw, add, axis=0)
-    #
-    #     queue = pd.DataFrame(queue_raw, columns=["time", "complexity"])
-    #     queue.to_csv(f"cache/agent_{local_rank}_queue.csv", index=False)
-    # elif generate:
-    #     queue = pd.DataFrame(columns=["time", "complexity"])
-    #     queue.to_csv(f"cache/agent_{local_rank}_queue.csv", index=False)
-    # else:
-    #     queue = pd.read_csv(f"cache/agent_{local_rank}_queue.csv")
-
+    # generate queue for each agent or use from file
     if generate:
         size = np.random.poisson(lam=50, size=1)[0] + 1
         if local_rank == 5:
             size = 100
-        # queue_raw = np.random.randint(100, size=(size, 2))
         queue_raw = [[np.random.randint(100), np.random.poisson(10)] for i in range(size)]
         add = [[0, np.random.poisson(lam=local_rank*10 + 1, size=1)[0]] for i in range(size)]
         queue_raw = np.append(queue_raw, add, axis=0)
@@ -113,6 +74,7 @@ if __name__ == "__main__":
         parameters=parameters,
         agent=agent,
         initial_condition=np.array([0]),
+        noise_function=lambda x: 0,
         enable_log=True)  # enable storing of the generated sequences
 
     # run the algorithm

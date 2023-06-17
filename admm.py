@@ -1,15 +1,16 @@
 import logging
-import sys
-import datetime
+from datetime import datetime
 
 import numpy as np
 import pandas as pd
-
-sys.path.append("C:/Program Files/JetBrains/PyCharm 2021.2.2/debug-eggs/pydevd-pycharm.egg")
-import pydevd_pycharm
 from disropt.agents import Agent
+from disropt.functions import QuadraticForm, Variable
+from disropt.problems import Problem
+from disropt.utils.graph_constructor import binomial_random_graph
 from mpi4py import MPI
-from lvp.local_voting import LocalVoting, AgentLB
+
+# get MPI info
+from lvp.local_voting import ADMM_LB, AgentLB
 
 size = MPI.COMM_WORLD.Get_size()
 rank = MPI.COMM_WORLD.Get_rank()
@@ -33,7 +34,7 @@ if __name__ == "__main__":
     logging.basicConfig(filename=f'cache/loggs/_loggs_{local_rank}.log', filemode='w', level=logging.INFO)
 
     if local_rank == 0:
-        print(f"Time: {datetime.datetime.now()}")
+        print(f"Time: {datetime.now()}")
     # Generate a common graph (everyone use the same seed)
     Adj = np.array([
         [0, 0, 1, 1, 0],
@@ -65,22 +66,54 @@ if __name__ == "__main__":
                     out_neighbors=np.nonzero(Adj[:, local_rank])[0].tolist(),
                     in_weights=W[local_rank, :].tolist())
     # instantiate the consensus algorithm
-    d = 2  # decision variable dimension (n, 1)
-    if local_rank == 0: logging.info(f"Looking for: {np.nonzero(Adj[local_rank, :])[0].tolist()} {np.nonzero(Adj[:, local_rank])[0].tolist()} {W[local_rank, :].tolist()}")
-    algorithm = LocalVoting(
-        gamma=0.2,
-        agent=agent,
-        initial_condition=np.array([0]),
-        noise_function=lambda x: 0,
-        enable_log=True)  # enable storing of the generated sequences
+    if local_rank == 0:
+        logging.info(f"Looking for: {np.nonzero(Adj[local_rank, :])[0].tolist()} {np.nonzero(Adj[:, local_rank])[0].tolist()} {W[local_rank, :].tolist()}")
+
+    # variable dimension
+    n = len(np.nonzero(Adj[local_rank, :])[0].tolist())
+    print(f"N = {n}")
+
+    # generate a positive definite matrix
+    P = np.eye(n)
+
+    # declare a variable
+    x = Variable(n)
+
+    # define the local objective function
+    fn = QuadraticForm(x, P)
+
+    # define a (common) constraint set
+    constr = [np.ones((n, 1)) @ x == 10]
+
+    # local problem
+    pb = Problem(fn, constr)
+    agent.set_problem(pb)
+
+    # instantiate the algorithms
+    initial_z = np.ones((n, 1))
+    # initial_lambda = {local_rank: 10*np.random.rand(n, 1)}
+    initial_lambda = {local_rank: np.ones((n, 1))}
+
+    for j in agent.in_neighbors:
+        # initial_lambda[j] = 10*np.random.rand(n, 1)
+        initial_lambda[j] = np.ones((n, 1))
+
+    algorithm = ADMM_LB(agent=agent,
+                        initial_lambda=initial_lambda,
+                        initial_z=initial_z,
+                        enable_log=True)
 
     # run the algorithm
-    sequence = algorithm.run(iterations=100)
+    x_sequence, lambda_sequence, z_sequence = algorithm.run(iterations=100, penalty=0.1, verbose=True)
+    x_t, lambda_t, z_t = algorithm.get_result()
 
     # print solution
-    print("Agent {}: {}".format(agent.id, algorithm.get_result()))
+    print("Agent {}: primal {} dual {} auxiliary primal {}".format(agent.id, x_t.flatten(), lambda_t, z_t.flatten()))
 
     # save data
     np.save("cache/agents.npy", nproc)
-    np.save("cache/agent_{}_sequence_lvp.npy".format(agent.id), sequence)
-    logging.warning(sequence)
+    np.save("cache/agent_{}_sequence_admm.npy".format(agent.id), x_sequence)
+    logging.warning(x_sequence)
+
+
+

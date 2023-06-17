@@ -3,7 +3,10 @@ import logging
 import numpy as np
 import pandas as pd
 from disropt.agents import Agent
-from disropt.algorithms import Consensus
+from disropt.algorithms import Consensus, ADMM
+from disropt.functions import Variable, QuadraticForm
+from disropt.problems import Problem
+from mpi4py import MPI
 from pandas import DataFrame
 
 
@@ -98,9 +101,8 @@ class AgentLB(Agent):
             to_send[key] = send
         # logging.warning(f"Left \n{self.queue}")
 
-        if len(to_send):
-            self.neighbors_exchange(to_send, dict_neigh=True)
-            self.queue = self.queue.reset_index(drop=True).sort_values("time")
+        self.neighbors_exchange(to_send if to_send else 0, dict_neigh=True)
+        self.queue = self.queue.reset_index(drop=True).sort_values("time")
 
     def receive_tasks(self, x):
         """
@@ -142,26 +144,38 @@ class AgentLB(Agent):
         # logging.warning(f"Executed queue {self.queue}")
 
 
-class LocalVoting(Consensus):
-
-    def __init__(self, gamma, agent: AgentLB, initial_condition: np.ndarray, enable_log: bool = False):
-        super(LocalVoting, self).__init__(agent=agent,
+class ConsensusLB(Consensus):
+    def __init__(
+            self,
+            agent: AgentLB,
+            initial_condition: np.ndarray,
+            noise_function,
+            enable_log: bool = False):
+        super(ConsensusLB, self).__init__(agent=agent,
                                           initial_condition=initial_condition,
                                           enable_log=enable_log)
-        self.gamma = gamma
+        self.noise_function = noise_function
 
     def iterate_run(self, step, **kwargs):
         """Run a single iterate of the algorithm
         :param step: current step
         """
         data = self.agent.neighbors_exchange(self.x)
+        logging.info("I am here 2")
 
         for neigh in data:
-            self.x_neigh[neigh] = data[neigh]
-
-        x_avg = self.x - self.gamma * sum([(self.x - self.x_neigh[i]) for i in self.agent.in_neighbors])
-        # logging.warning(f"Step: {step} x: {self.x}, x_avg: {x_avg}")
+            self.x_neigh[neigh] = data[neigh] + self.noise_function(step)
+        x_avg = self.one_step()
         self.agent.update_value(self.x, x_avg, step)
+
+    def one_step(self):
+        """
+        Implement one algorithm step calculations
+        :param step: number of current step
+        :return: average value of the queue
+        """
+        logging.info("I am here 3")
+        pass
 
     def run(self, iterations: int = 100, verbose: bool = False, **kwargs):
         """Run the algorithm for a given number of iterations
@@ -170,35 +184,52 @@ class LocalVoting(Consensus):
             iterations: Number of iterations. Defaults to 100.
             verbose: If True print some information during the evolution of the algorithm. Defaults to False.
         """
-        # logging.warning(f"Agent:{self.agent.id}")
+
         if not isinstance(iterations, int):
             raise TypeError("iterations must be an int")
+        logging.info("I am here")
         if self.enable_log:
-            dims = [iterations]
+            dims = [iterations + 1]
             for dim in self.x.shape:
                 dims.append(dim)
             self.sequence = np.zeros(dims)
 
         for k in range(iterations):
             self.x = self.agent.get_queue_length(k)
-            # logging.warning(f"Step: {k}, x = {self.x}")
+
+            if self.enable_log:
+                self.sequence[k] = self.x
+
             if k == 0:
                 print(f"Agent {self.agent.id}: x = {self.x}")
 
-            if verbose:
-                queue_1 = self.agent.get_queue(k)
-                new_queue = queue_1[queue_1.time == k]
-                # logging.warning(f"new tasks {sum(new_queue.complexity)}: \n{new_queue}")
-
             self.iterate_run(k, **kwargs)
 
-            if self.enable_log:
-                self.x = self.agent.get_queue_length(k)
-                self.sequence[k] = self.x
-
+        if self.enable_log:
+            self.x = self.agent.get_queue_length(k + 1)
+            self.sequence[k + 1] = self.x
 
         if self.enable_log:
             return self.sequence
+
+
+class LocalVoting(ConsensusLB):
+
+    def __init__(
+            self,
+            gamma,
+            agent: AgentLB,
+            initial_condition: np.ndarray,
+            noise_function,
+            enable_log: bool = False):
+        super(LocalVoting, self).__init__(agent=agent,
+                                          initial_condition=initial_condition,
+                                          enable_log=enable_log,
+                                          noise_function=noise_function)
+        self.gamma = gamma
+
+    def one_step(self):
+        return self.x - self.gamma * sum([self.agent.in_weights[i] * (self.x - self.x_neigh[i]) for i in self.agent.in_neighbors])
 
 
 class AccelerateParameters:
@@ -214,15 +245,17 @@ class AccelerateParameters:
         return self
 
 
-class AcceleratedLocalVoting(LocalVoting):
+class AcceleratedLocalVoting(ConsensusLB):
     def __init__(self,
                  parameters: dict,
                  agent: AgentLB,
                  initial_condition: np.ndarray,
+                 noise_function,
                  enable_log: bool = False):
-        super(LocalVoting, self).__init__(agent=agent,
-                                          initial_condition=initial_condition,
-                                          enable_log=enable_log)
+        super(AcceleratedLocalVoting, self).__init__(agent=agent,
+                                                     initial_condition=initial_condition,
+                                                     enable_log=enable_log,
+                                                     noise_function=noise_function)
         self.nesterov_step = 0
 
         self.L = parameters.get("L")
@@ -232,36 +265,25 @@ class AcceleratedLocalVoting(LocalVoting):
         self.gamma = parameters.get("gamma", [])
         self.alpha = parameters.get("alpha")
 
-
-    def iterate_run(self, step, **kwargs):
-        """Run a single iterate of the algorithm
-        """
-        data = self.agent.neighbors_exchange(self.x)
-
-        for neigh in data:
-            self.x_neigh[neigh] = data[neigh]
-
+    def one_step(self):
         self.gamma = [self.gamma[-1]]
         self.gamma.append((1 - self.alpha) * self.gamma[0] + self.alpha * (self.mu - self.eta))
         x_n = 1 / (self.gamma[0] + self.alpha * (self.mu - self.eta)) \
               * (self.alpha * self.gamma[0] * self.nesterov_step + self.gamma[1] * self.x)
 
         y_n = sum([self.agent.in_weights[i] * (x_n - self.x_neigh[i]) for i in self.agent.in_neighbors])
-        # logging.warning(f"y_n = {y_n}, x - alpha y_n = {self.x - self.h*y_n}")
-        # logging.warning(f"x_n = {x_n} x = {self.x}")
         x_avg = x_n - self.h * y_n
 
         self.nesterov_step = 1 / self.gamma[0] * \
                              ((1 - self.alpha) * self.gamma[0] * self.nesterov_step
                               + self.alpha * (self.mu - self.eta) * x_n
                               - self.alpha * y_n)
-        # logging.warning(f"Step: {step} x: {self.x}, x_avg: {x_avg}")
-        self.agent.update_value(self.x, x_avg, step)
 
         H = self.h - self.h * self.h * self.L / 2
         if H - self.alpha * self.alpha / (2 * self.gamma[1]) < 0:
             logging.warning(H)
             logging.exception(f"Oh no: {H - self.alpha * self.alpha / (2 * self.gamma[1])}")
-            print("Exception")
+            logging.info("Exception")
             raise BaseException()
 
+        return x_avg
