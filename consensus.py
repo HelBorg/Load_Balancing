@@ -2,6 +2,9 @@ import os
 import sys
 
 import numpy as np
+import pandas as pd
+
+from lvp.local_voting import AgentLB
 
 sys.path.append("C:/Program Files/JetBrains/PyCharm 2021.2.2/debug-eggs/pydevd-pycharm.egg")
 import pydevd_pycharm
@@ -17,6 +20,7 @@ rank = MPI.COMM_WORLD.Get_rank()
 #     pydevd_pycharm.settrace('localhost', port=port_mapping[rank], stdoutToServer=True, stderrToServer=True)
 
 # print(f"pid: {os.getpid()}, size = {size}, rank: {rank}")
+
 # mpiexec - np 3 python consensus.py
 
 if __name__ == "__main__":
@@ -32,10 +36,14 @@ if __name__ == "__main__":
     # reset local seed
     np.random.seed()
 
+    queue = pd.DataFrame(np.random.randint(0, 100, size=(100, 2)), columns=["time", "complexity"])
+
     # create local agent
-    agent = Agent(in_neighbors=np.nonzero(Adj[local_rank, :])[0].tolist(),
-                  out_neighbors=np.nonzero(Adj[:, local_rank])[0].tolist(),
-                  in_weights=W[local_rank, :].tolist())
+    agent = AgentLB(queue=queue,
+                    produc=1,
+                    in_neighbors=np.nonzero(Adj[local_rank, :])[0].tolist(),
+                    out_neighbors=np.nonzero(Adj[:, local_rank])[0].tolist(),
+                    in_weights=W[local_rank, :].tolist())
 
     # instantiate the consensus algorithm
     n = 4  # decision variable dimension (n, 1)
